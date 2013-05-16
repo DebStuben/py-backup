@@ -13,6 +13,7 @@ VERSION = "1.0"
 VERSION_DATE = "May 15 2013 16:15:08"
 
 TIME_BEGIN = time.clock()
+DATE = time.strftime("%Y%m%d_%Hh%M")
 
 #========================================================
 #                    Functions 
@@ -150,16 +151,19 @@ def humanSizeof(num):
 # Get the command line options and arguments:
 (options, args) = parseArgs()
 
-# Open config file
-config = ConfigParser.RawConfigParser()
-# read config file
-config.read(options.conffile)
+
+# Vars
+tmpPath = formatPath(options.tmp) + '/backup-' + DATE + '_' + options.period
+tarName = 'backup-' + DATE + '_' + options.period + '.tar.gz'
+tarPath = tmpPath + '/' + tarName
+
+config = ConfigParser.RawConfigParser()					# Open config file
+config.read(options.conffile)							# read config file
 
 logger("Backup start (" + str(config.get('backup', 'name')) + ') - Type : ' + str(options.period));
 
 
 # Creating temporary dir
-tmpPath = formatPath(options.tmp) + '/backup-' + time.strftime("%Y%m%d_%Hh%M") + '_' + options.period
 if not os.path.exists(tmpPath): 
 	try:
 		os.makedirs(tmpPath)
@@ -170,57 +174,55 @@ if not os.path.exists(tmpPath):
 
 
 # Creating archive
-tarName = 'backup-' + time.strftime("%Y%m%d_%Hh%M") + '_' + options.period + '.tar.gz'
+tar = tarfile.open(tarPath, "w:gz")
 logger('Creating archive (' + tarName + ') ...')
-tar = tarfile.open(tmpPath + '/' + tarName, "w:gz")
 
-# Add each file
-for f in splitComa(config.get('backup', 'files')):
+################################
+# Backup files and directories #
+################################
+for f in splitComa(config.get('backup', 'files')):		# Add each file
 	tar.add(f.strip())
 
-# Add each dir
-for d in splitComa(config.get('backup', 'dirs')):
+for d in splitComa(config.get('backup', 'dirs')):		# Add each dirs
 	tar.add(d.strip())
 
-
-# Dump Mysql
+##############
+# Dump Mysql #
+##############
 if config.get('backup', 'mysqldb') != '':
 	logger('MySQL dump bases...')
-	bases = splitComa(config.get('backup', 'mysqldb'))
+	bases = splitComa(config.get('backup', 'mysqldb'))	# Fetches the list of databases
 	for db in bases:
-		db = db.strip()
-		fdb = "dump-Mysql_" + db + "_" + time.strftime("%Y%m%d_%Hh%M") + ".sql"
+		db = db.strip()									# Removes spaces at the beginning and end of the character string
+		fdb = "dump-Mysql_" + db + "_" + DATE + ".sql"	# Name of dump sql file
 		logger('Dump base ' + db)
-		# Dump mysql
-		os.system("mysqldump --add-drop-table -c -u " + config.get('backup', 'userdb') + " -p" + config.get('backup', 'passdb') + " " + db + " > " + tmpPath + "/" + fdb)
-		# Add file in archive backup
-		tar.add(tmpPath + "/" + fdb, arcname=fdb)
+		os.system("mysqldump --add-drop-table -c -u " + config.get('backup', 'userdb') + " -p" + config.get('backup', 'passdb') + " " + db + " > " + tmpPath + "/" + fdb)		# Dump 
+		tar.add(tmpPath + "/" + fdb, arcname=fdb)		# Add file in archive backup
 
 	logger('MySQL dump completed')
 
-# Close archive 
-tar.close()
-arcSize = humanSizeof(os.path.getsize(tmpPath + '/' + tarName))
+
+tar.close()												# Close archive
+arcSize = humanSizeof(os.path.getsize(tarPath))			# Size of archive
 logger('Archive completed')
 
 
+###########
+# Exports #
+###########
 
-# Exports
-## Export FS
+# Export in filesytem or mount point
 if str(config.get('export-fs', 'enable')).lower() == 'true':
-	# for each destination
-	for fs in splitComa(config.get('export-fs', 'dest')):
-		fs = formatPath(fs)
+	for fs in splitComa(config.get('export-fs', 'dest')):	# Fetches the list of destination
+		fs = formatPath(fs)									# Clean path
 		logger('Export to directory (' + fs + '/' + config.get('backup', 'name') + '/' + str(options.period) + ') ...')
 		
-		# Create directory if not exist
 		try:
-			if not os.path.exists(fs + '/' + config.get('backup', 'name') + '/' + str(options.period)): 
+			if not os.path.exists(fs + '/' + config.get('backup', 'name') + '/' + str(options.period)): 	# Create directory if not exist
 				os.makedirs(fs + '/' + config.get('backup', 'name') + '/' + str(options.period))
 
-			# Copy file in directory
 			try:
-				shutil.copyfile(tmpPath + '/' + tarName, fs + '/' + config.get('backup', 'name') + '/' + str(options.period) + '/' + tarName )
+				shutil.copyfile(tarPath, fs + '/' + config.get('backup', 'name') + '/' + str(options.period) + '/' + tarName )		# Copy file in directory
 			except IOError, e:
 				logger('Error during file export : ' + str(e))
 
@@ -233,14 +235,14 @@ if str(config.get('export-fs', 'enable')).lower() == 'true':
 ## Export SCP
 if str(config.get('export-scp', 'enable')).lower() == 'true':
 	logger('Export to SCP (' + str(config.get('export-scp', 'host')) + ')...')
-	os.system("scp " + tmpPath + '/' + tarName + " " + str(config.get('export-scp', 'user')).strip() + "@" + str(config.get('export-scp', 'host')).strip() + ":" + formatPath(config.get('export-scp', 'dest')) + " > /dev/null")
+	os.system("scp " + tarPath + " " + str(config.get('export-scp', 'user')).strip() + "@" + str(config.get('export-scp', 'host')).strip() + ":" + formatPath(config.get('export-scp', 'dest')) + " > /dev/null")		# Copy tar.gz with scp
 	logger('SCP export completed')
 
 
 ## Export RSYNC
 if str(config.get('export-rsync', 'enable')).lower() == 'true':
 	logger('Export to RSYNC (' + str(config.get('export-rsync', 'host')) + ')...')
-	os.system("rsync -e ssh -az  " + tmpPath + '/' + tarName + " " + str(config.get('export-rsync', 'user')).strip() + "@" + str(config.get('export-rsync', 'host')).strip() + ":" + formatPath(config.get('export-rsync', 'dest')) + " > /dev/null")
+	os.system("rsync -e ssh -az  " + tarPath + " " + str(config.get('export-rsync', 'user')).strip() + "@" + str(config.get('export-rsync', 'host')).strip() + ":" + formatPath(config.get('export-rsync', 'dest')) + " > /dev/null")		# Copy tar.gz with rsync
 	logger('RSYNC export completed')
 
 
@@ -248,9 +250,9 @@ if str(config.get('export-rsync', 'enable')).lower() == 'true':
 if str(config.get('export-ftp', 'enable')).lower() == 'true':
 	logger('Export to FTP (' + str(config.get('export-ftp', 'host')) + ')...')
 	try:
-		ftp = ftplib.FTP(config.get('export-ftp','host'), config.get('export-ftp','user'), config.get('export-ftp','pass'))
-		ftp.cwd(str(config.get('export-ftp', 'dest')).strip())
-		ftp.storbinary(('STOR ' + config.get('export-ftp', 'dest') + '/' + tarName).encode('utf-8'), open(tmpPath + '/' + tarName, 'rb'))
+		ftp = ftplib.FTP(config.get('export-ftp','host'), config.get('export-ftp','user'), config.get('export-ftp','pass'))		# Ftp connection
+		ftp.cwd(str(config.get('export-ftp', 'dest')).strip())																	# Go to the destination directory
+		ftp.storbinary(('STOR ' + config.get('export-ftp', 'dest') + '/' + tarName).encode('utf-8'), open(tarPath, 'rb'))		# Upload tar.gz
 	except Exception, e:
 		logger('Error to FTP export : ' + str(e))
 
@@ -265,6 +267,6 @@ except OSError, e:
 	logger('Error when deleting temporary directory : ' + str(e))
 
 
-timeExecution = time.clock() - TIME_BEGIN
+timeExecution = time.clock() - TIME_BEGIN					# Calculate time execution	
 logger('Backup completed, size:' + str(arcSize) + ' (time execution:' + str(timeExecution) + 's)')
 
